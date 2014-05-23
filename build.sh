@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 BASE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-V8_REVISION="18454" #Tag 3.24.10
+V8_REF="3.24.10" 
 PRODUCTNAME="Event Store Open Source"
 COMPANYNAME="Event Store LLP"
 COPYRIGHT="Copyright 2012 Event Store LLP. All rights reserved."
@@ -151,61 +151,109 @@ function err() {
     exit 1
 }
 
+function getV8FromInternet() {
+    ref=$1
+    
+    mkdir v8
+    pushd v8 > /dev/null
+    curl -L https://api.github.com/repos/v8/v8/tarball/$ref | tar -x --strip-components 1 -f -
+    echo $ref > EVENT_STORE_CURRENT_REVISION
+    popd > /dev/null
+}
+
 function getV8() {
-    revision=$1
+    ref=$1
 
-    if [[ -d v8/.svn ]] ; then
-        pushd v8 > /dev/null || err
-		svnrevision=`svn info | sed -ne 's/^Revision: //p'`
-
-        if [[ "$svnrevision" != "$revision" ]] ; then
-            echo "Updating V8 repository to revision $revision..."
-            svn update --quiet -r$revision
-		else
-            echo "V8 repository already at revision $revision"
+    if [[ -d v8 ]] ; then
+        correctRef=0
+        echo "Already found V8 in the build path."
+        if [[ -f v8/EVENT_STORE_CURRENT_REVISION ]] ; then
+            existing=`cat v8/EVENT_STORE_CURRENT_REVISION`
+            if [[ $existing == $ref ]] ; then
+                correctRef=1
+            fi
+        else
+            correctRef=0
         fi
-        popd > /dev/null || err
+
+        if [[ $correctRef == 0 ]] ; then
+            echo "Removing existing V8 as it's not from our script"
+            rm -rf v8
+            getV8FromInternet $ref
+        fi
     else
-		if [[ -d v8 ]] ; then
-			echo
-		fi
-		echo "Checking out V8 repository..."
-		svn checkout --quiet -r$revision http://v8.googlecode.com/svn/trunk v8
+        getV8FromInternet $ref
     fi
 }
 
+function getGypFromInternet() {
+    ref=$1
+    echo "Getting Gyp ref $ref"
+
+    pushd v8 > /dev/null
+    mkdir -p build/gyp > /dev/null
+    pushd build/gyp > /dev/null
+    curl -L https://api.github.com/repos/EventStore/gyp/tarball/$ref | tar -x --strip-components 1 -f -
+    echo $ref > EVENT_STORE_CURRENT_REVISION
+    popd > /dev/null
+    popd > /dev/null
+}
+
+function getICUFromInternet() {
+    ref=$1
+    echo "Getting ICU ref $ref"
+
+    pushd v8 > /dev/null
+    mkdir -p third_party/icu > /dev/null
+    pushd third_party/icu > /dev/null
+    curl -L https://api.github.com/repos/EventStore/icu46/tarball/$ref | tar -x --strip-components 1 -f -
+    echo $ref > EVENT_STORE_CURRENT_REVISION
+    popd > /dev/null
+    popd > /dev/null
+}
+
 function getDependencies() {
-    needsDependencies=false
+    gypRef="27c626e0515f845338cb60b1d8405f40150a791d"
+    icuRef="58c586c0424f93b75bba83fe39c651b39d146da3"
 
     if [[ -d v8/build/gyp ]] ; then
         pushd v8/build/gyp > /dev/null || err
-        currentGypRevision=`svn info | sed -ne 's/^Revision: //p'`
-        if [[ "$currentGypRevision" -ne "1806" ]] ; then
-            needsDependencies=true
+        correctRef=0
+        if [[ -f EVENT_STORE_CURRENT_REVISION ]] ; then
+            existing=`cat EVENT_STORE_CURRENT_REVISION`
+            if [[ $existing == $gypRef ]] ; then
+                correctRef=1
+            fi
+        else
+            correctRef=0
         fi
         popd > /dev/null || err
+
+        if [[ $correctRef == 0 ]] ; then
+            getGypFromInternet $gypRef
+        fi
     else
-        needsDependencies=true
+        getGypFromInternet $gypRef
     fi
 
     if [[ -d v8/third_party/icu ]] ; then
         pushd v8/third_party/icu > /dev/null || err
-        currentIcuRevision=`svn info | sed -ne 's/^Revision: //p'`
-        if [[ "$currentIcuRevision" -ne "239289" ]] ; then
-            needsDependencies=true
+        correctRef=0
+        if [[ -f EVENT_STORE_CURRENT_REVISION ]] ; then
+            existing=`cat EVENT_STORE_CURRENT_REVISION`
+            if [[ $existing == $icuRef ]] ; then
+                correctRef=1
+            fi
+        else
+            correctRef=0
         fi
         popd > /dev/null || err
-    else
-        needsDependencies=true
-    fi
 
-    if $needsDependencies ; then
-        pushd v8 > /dev/null || err
-        echo "Running make dependencies"
-        $make dependencies || err
-        popd > /dev/null || err
+        if [[ $correctRef == 0 ]] ; then
+            getICUFromInternet $icuRef
+        fi
     else
-        echo "Dependencies already at correct revisions"
+        getICUFromInternet $icuRef
     fi
 }
 
@@ -399,8 +447,10 @@ if [[ "$ACTION" == "js1" ]] ; then
 else
 
     if [[ "$ACTION" == "incremental" || "$ACTION" == "full" ]] ; then
-        getV8 $V8_REVISION
+        getV8 $V8_REF
         getDependencies
+
+        return
 
         buildV8
         buildJS1
